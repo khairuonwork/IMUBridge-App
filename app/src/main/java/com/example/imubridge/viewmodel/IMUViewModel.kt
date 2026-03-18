@@ -1,24 +1,39 @@
 package com.example.imubridge.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.imubridge.imu.IMUCollector
 import com.example.imubridge.imu.IMUState
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.sample
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.SharingStarted
+import com.example.imubridge.packet.PacketFormatter
+import com.example.imubridge.network.SocketSender
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+sealed class StreamingState {
+    object Idle : StreamingState()
+    object Connecting : StreamingState()
+    object Streaming : StreamingState()
+}
 
 @OptIn(FlowPreview::class)
 class IMUViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
+        private const val TAG = "IMUViewModel"
         private const val UI_SAMPLE_MS = 50L
+        private const val NETWORK_SAMPLE_MS = 20L
     }
 
     private val collector = IMUCollector(application)
+    private val sender = SocketSender()
+
+    private var streamingJob: Job? = null
+    private var started = false
+
+    private val _streamingState = MutableStateFlow<StreamingState>(StreamingState.Idle)
+    val streamingState: StateFlow<StreamingState> = _streamingState
 
     val imuState: StateFlow<IMUState> =
         collector.imuState
@@ -33,26 +48,74 @@ class IMUViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
 
-    private var started = false
-
     init {
-        start()
+        startSensor()
     }
 
-    fun start() {
+    private fun startSensor() {
         if (!started) {
             collector.start()
             started = true
+            Log.d(TAG, "Sensor started")
         }
     }
 
-    fun stop() {
-        collector.stop()
-        started = false
+    fun startStreaming() {
+        if (streamingJob?.isActive == true) {
+            Log.d(TAG, "Streaming already active")
+            return
+        }
+
+        streamingJob = viewModelScope.launch {
+
+            _streamingState.value = StreamingState.Connecting
+            Log.d(TAG, "Connecting...")
+
+            // 🔥 suspend → pasti selesai
+            val connected = sender.connect("127.0.0.1", 5000)
+
+            if (!connected) {
+                Log.e(TAG, "Connection failed")
+                _streamingState.value = StreamingState.Idle
+                return@launch
+            }
+
+            Log.d(TAG, "Connected SUCCESS")
+
+            // 🔥 handshake
+            sender.send("#HELLO")
+
+            _streamingState.value = StreamingState.Streaming
+
+            // 🔥 stream IMU
+            collector.imuState
+                .sample(NETWORK_SAMPLE_MS)
+                .collect { state ->
+                    val packet = PacketFormatter.format(state)
+                    sender.send(packet)
+                }
+        }
+    }
+
+    fun stopStreaming() {
+        if (_streamingState.value != StreamingState.Streaming) return
+
+        Log.d(TAG, "Stopping streaming")
+
+        streamingJob?.cancel()
+        streamingJob = null
+
+        sender.close()
+        _streamingState.value = StreamingState.Idle
     }
 
     override fun onCleared() {
         super.onCleared()
+
+        Log.d(TAG, "ViewModel cleared")
+
+        streamingJob?.cancel()
         collector.stop()
+        sender.close()
     }
 }

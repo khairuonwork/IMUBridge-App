@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.imubridge.ui.cards.IMUCard
 import com.example.imubridge.viewmodel.IMUViewModel
+import com.example.imubridge.ui.cards.StreamingCard
 
 @Composable
 fun IMUScreen(
@@ -16,10 +17,17 @@ fun IMUScreen(
 ) {
 
     val imu by viewModel.imuState.collectAsState()
+    val streamingState by viewModel.streamingState.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
+
+        StreamingCard(
+            state = streamingState,
+            onStart = { viewModel.startStreaming() },
+            onStop = { viewModel.stopStreaming() }
+        )
 
         IMUCard(
             title = "Gyroscope",
