@@ -1,7 +1,3 @@
-/*
-    IMUState -> String (packet)
- */
-
 package com.example.imubridge.packet
 
 import com.example.imubridge.imu.IMUState
